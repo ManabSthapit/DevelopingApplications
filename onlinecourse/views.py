@@ -111,19 +111,31 @@ def enroll(request, course_id):
          # Add each selected choice object to the submission object
          # Redirect to show_exam_result with the submission id
 def submit(request, course_id):
-    course = get_object_or_404(Course, pk=course_id)
+    # Getting the current user, course object and the user's enrollment
     user = request.user
-    enrollment = Enrollment.objects.filter(user=user, course=course).get()
-   
-    submission = Submission.objects.create(enrollment_id = enrollment.id )
+    course = get_object_or_404(Course, id=course_id)
+    enrollment = Enrollment.objects.get(user=user, course=course)
 
-    answers =  extract_answers(request)
-    for a in answers:
-        temp_c = Choice.objects.filter(id = int(a)).get()
-        submission.choices.add(temp_c)
+    # Creating a new Submission object / Submission table entry in db
+    submission = Submission.objects.create(enrollment=enrollment)
 
-    submission.save()         
-    return HttpResponseRedirect(reverse(viewname='onlinecourse:show_exam_result', args=(course.id,submission.id ))) 
+    # Extracting the selected choices from the POST request
+    submitted_answers = []
+    for key in request.POST:
+        if key.startswith('choice'):
+            value = request.POST[key]
+            choice_id = int(value)
+            submitted_answers.append(choice_id)
+
+    # Adding the selected choices to the Submission table (model)
+    for choice_id in submitted_answers:
+        choice_obj = Choice.objects.get(id=choice_id)
+        submission.choices.add(choice_obj)
+    submission.save()  # saving the changes
+    print(f"Submitted exam for user {user} in course {course_id}")
+
+    # Redirecting to the show_exam_result view with the submission id
+    return HttpResponseRedirect(reverse(viewname='onlinecourse:show_exam_result', args=(course_id, submission.id))) 
 
 
 # <HINT> A example method to collect the selected choices from the exam form from the request object
@@ -144,42 +156,34 @@ def extract_answers(request):
         # For each selected choice, check if it is a correct answer or not
         # Calculate the total score
 def show_exam_result(request, course_id, submission_id):
-    course  =  get_object_or_404(Course, pk=course_id)
-    submission =      get_object_or_404(Submission, pk=submission_id)
-    total =  0
-    total_user =  0
-    q_results = {}
-    c_submits = {}
-    c_results = {}
-    for q in course.question_set.all():
-        q_total = 0
-        q_total_user = 0
-        for c in q.choice_set.all():
-            q_total += 1  
-            temp_right = c.is_correct
-            count =  submission.choices.filter(id = c.id).count()
+    course_obj = Course.objects.get(id=course_id)
 
-            temp_user  = count > 0 
-            c_submits[c.id] = temp_user
-            c_results[c.id] = temp_user == temp_right
-            if temp_user == temp_right:
-                q_total_user += 1        
-        q_results[q.id] =  q.grade*(q_total_user / q_total)
-        total += q.grade 
-        total_user  += q_results[q.id]
-    context  = {}
-    context["course"]  =  course
-    context["submission"]  =  submission
-    #context["choices"]  =  submission.choices.all()
-    context["total"]  =  total
-    context["total_user"]  =  total_user
-    context["q_results"]  =  q_results
-    context["c_submits"]  =  c_submits
-    context["c_results"]  =  c_results
-    context["grade"]  =  int((total_user/total)*100)
-    #print(vars(submission.choices))
-    #user = request.user
-    #return render(request, 'onlinecourse/show_exam_result.html', context)
+    context = {}
+    context['course'] = course_obj
+
+    submission_choices = Submission.objects.get(id=submission_id).choices.all()
+    context['choices'] = submission_choices
+    print("Submission choices: \n", submission_choices)
+
+    all_exam_questions = Question.objects.filter(courses=course_id)
+    context['questions'] = all_exam_questions
+    print("All exam questions: \n", all_exam_questions)
+
+    all_exam_choices = [question.choice_set for question in all_exam_questions]
+    print("All exam choices: \n", all_exam_choices)
+
+    # Calculate the submission score
+    submission_score = 0
+    max_score = 0
+    for question in all_exam_questions:
+        max_score += question.marks
+        if question.answered_correctly(submission_choices):
+            submission_score += question.marks
+        
+    # Determine a grade (points are % correct, rounded to nearest whole integer)
+    context['grade'] = round(submission_score / max_score * 100)
+    print("Submission grade: ", submission_score)
+
     return render(request, 'onlinecourse/exam_result_bootstrap.html', context)
 
 
